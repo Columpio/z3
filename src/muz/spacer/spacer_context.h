@@ -646,6 +646,7 @@ public:
     ptr_vector<datalog::rule> const& rules() const {return m_rules;}
     func_decl* sig(unsigned i) const {return m_sig[i];} // signature
     func_decl* const* sig() {return m_sig.c_ptr();}
+    func_decl_ref_vector& sigv() {return m_sig;}
     unsigned  sig_size() const {return m_sig.size();}
     expr*  transition() const {return m_transition;}
     expr*  init() const {return m_init;}
@@ -1361,6 +1362,10 @@ class context {
     void updt_params();
     lbool handle_unknown(pob &n, const datalog::rule *r, model &model);
     bool mk_mdl_rf_consistent(model &mdl);
+
+    bool foreign_solver_ended_with_sat;
+    void async_call_foreign_solver_on_clauses();
+    std::string save_clauses_to_temporary_file();
 
 public:
     /**

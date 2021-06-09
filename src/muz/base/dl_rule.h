@@ -273,7 +273,10 @@ namespace datalog {
 
         app_ref ensure_app(expr* e);
 
-        void to_formula(rule const& r, expr_ref& result);
+        class rule_expr_traverser {
+            public: virtual void traverse_rule_expr(expr_ref&) = 0;
+        };
+        void to_formula(const rule &r, expr_ref &fml, rule_expr_traverser * traverser = nullptr);
 
         std::ostream& display_smt2(rule const& r, std::ostream & out);
 

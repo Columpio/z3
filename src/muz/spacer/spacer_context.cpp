@@ -23,10 +23,12 @@ Notes:
 
 #include <sstream>
 #include <iomanip>
+#include <future>
 
 #include "util/util.h"
 #include "util/timeit.h"
 #include "util/luby.h"
+#include "ast/recurse_expr_def.h"
 #include "ast/rewriter/rewriter.h"
 #include "ast/rewriter/rewriter_def.h"
 #include "ast/rewriter/var_subst.h"
@@ -2795,6 +2797,8 @@ lbool context::solve(unsigned from_lvl)
 
 
 void context::checkpoint() {
+    if (foreign_solver_ended_with_sat)
+        throw default_exception("off-the-shelf solver ended with sat"); //TODO: need to kill all other processes?
     tactic::checkpoint(m);
 }
 
@@ -3057,6 +3061,8 @@ lbool context::solve_core (unsigned from_lvl)
         m_stats.m_max_query_lvl = lvl;
 
         if (check_reachability()) { return l_true; }
+
+        async_call_foreign_solver_on_clauses();
 
         if (lvl > 0 && m_use_propagate)
             if (propagate(m_expanded_lvl, lvl, UINT_MAX)) { dump_json(); return l_false; }
@@ -3872,6 +3878,179 @@ lbool context::expand_pob(pob& n, pob_ref_buffer &out)
     }
     UNREACHABLE();
     throw unknown_exception();
+}
+
+std::string exec(const char* cmd) {
+    std::array<char, 128> buffer;
+    std::ostringstream result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result << buffer.data();
+    }
+    return result.str();
+}
+
+bool run_foreign_solver_process(const std::string& filename)
+{
+    std::ostringstream command;
+    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
+    std::string vampire_path = "/home/columpio/Documents/vampire";
+    int timelimit_seconds = 5;
+
+    setenv("vampire", vampire_path.c_str(), true);
+    command << "dotnet " << ringen_path << " solve --quiet --timelimit " << timelimit_seconds << " vampire " << filename << " 2>&1";
+
+    std::string solver_result = exec(command.str().c_str());
+
+    if ("unsat\n" == solver_result || "unknown\n" == solver_result)
+        return false;
+    else if ("sat\n" == solver_result)
+        return true;
+    else {
+        NOT_IMPLEMENTED_YET();
+        return false;
+    }
+}
+
+class lemma_adder : public datalog::rule_manager::rule_expr_traverser {
+    typedef obj_map<func_decl, expr *> lemmas_map;
+    typedef obj_map<func_decl, func_decl_ref_vector *> sig_map;
+
+    context& m_ctx;
+    ast_manager& m;
+    sig_map * m_signatures;
+    lemmas_map * m_lemmas;
+
+    struct lemma_rename_visitor {
+        ast_manager& m;
+        manager& m_pm;
+        const func_decl_ref_vector& signature;
+        const expr_ref_vector& children;
+
+        lemma_rename_visitor(lemma_adder& parent, expr_ref_vector& children, func_decl_ref_vector& signature)
+                : m(parent.m), m_pm(parent.m_ctx.get_manager()), signature(signature), children(children) {}
+
+        expr * visit(var * v) { return v; }
+        expr * visit(app * application, expr * const * subterms) {
+            auto app_decl = application->get_decl();
+            if (m_pm.is_muxed(app_decl)) {
+                auto app_decl_old = m_pm.n2o(app_decl, 0); //TODO: is this a rule number?
+                for (unsigned i = 0u; i < signature.size(); i++) {
+                    if (app_decl_old == signature[i]) {
+                        return children[i];
+                    }
+                }
+                UNREACHABLE();
+            }
+            auto newapp = m.mk_app(app_decl, application->get_num_args(), subterms);
+            return newapp;
+        }
+        expr * visit(quantifier * q, expr *, expr * const *, expr * const *) { UNREACHABLE(); return nullptr; }
+    };
+
+    expr * rename_lemma(app * head, expr * const * subterms, expr * lemma) {
+        expr_ref_vector children(m, head->get_num_args(), subterms);
+        auto signature = m_signatures->find(head->get_decl());
+        lemma_rename_visitor v(*this, children, *signature);
+        recurse_expr<expr *, lemma_rename_visitor, true, false> r(v);
+        return r(lemma);
+    }
+
+    struct lemma_add_visitor {
+        ast_manager& m;
+        lemmas_map * m_lemmas;
+        lemma_adder& parent;
+
+        explicit lemma_add_visitor(lemma_adder& l) : m(l.m_ctx.get_ast_manager()), m_lemmas(l.m_lemmas), parent(l) {}
+
+        expr * visit(var * v) { return v; }
+        expr * visit(app * app, expr * const * children) {
+            auto pred = m.mk_app(app->get_decl(), app->get_num_args(), children);
+            auto lemma = m_lemmas->find_iterator(app->get_decl());
+            if (lemma != m_lemmas->end()) {
+                auto lemma_with_renaming = parent.rename_lemma(app, children, lemma->m_value);
+                return m.mk_and(pred, lemma_with_renaming);
+            }
+            return pred;
+        }
+        expr * visit(quantifier * q, expr *, expr * const *, expr * const *) { UNREACHABLE(); return nullptr; }
+    };
+
+public:
+    explicit lemma_adder(context& ctx) : m_ctx(ctx), m(ctx.get_ast_manager()), m_signatures(new sig_map()), m_lemmas(new lemmas_map()) {
+        for (auto& kv : ctx.get_pred_transformers()) {
+            lemma_ref_vector all_lemmas;
+            bool with_background_invariants = false; //TODO: should use it? m_pinned_lemmas? use_bg_invs();
+            kv.m_value->get_all_lemmas(all_lemmas, with_background_invariants);
+
+            expr_ref_vector all_lemmas_vec(ctx.get_ast_manager());
+            for (auto lemma_cube : all_lemmas) {
+                all_lemmas_vec.push_back(lemma_cube->get_expr());
+            }
+            flatten_and(all_lemmas_vec);
+            m_lemmas->insert(kv.m_key, mk_and(all_lemmas_vec).steal());
+            m_signatures->insert(kv.m_key, &kv.m_value->sigv());
+        }
+    }
+
+    void traverse_rule_expr(expr_ref& fml) final {
+        lemma_add_visitor v(*this);
+        recurse_expr<expr *, lemma_add_visitor, true, false> r(v);
+        fml = r(fml.steal());
+    }
+};
+
+std::string context::save_clauses_to_temporary_file()
+{
+    std::ostringstream tmp_file_names;
+    auto current_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    tmp_file_names << "/tmp/" << current_time << ".smt2";
+    std::string tmp_file_name = tmp_file_names.str();
+    std::ofstream tmp_file;
+    tmp_file.open(tmp_file_name);
+    tmp_file << "(set-logic HORN)" << std::endl;
+
+    //TODO: add declare-datatypes
+    decl_collector decls(m);
+    for (auto &relation : m_rels) {
+        decls.visit(relation.m_key);
+    }
+    for (auto sort : decls.get_sorts()) {
+        tmp_file << mk_smt_pp(sort, m) << std::endl;
+    }
+
+    // add `declare-fun`s to file
+    for (auto &relation : m_rels) {
+        tmp_file << mk_pp(relation.m_key, m) << std::endl;
+    }
+
+    // add CHC rules to file
+    lemma_adder lemmer(*this);
+    datalog::rule_manager& rm = get_datalog_context().get_rule_manager();
+    for (auto& kv : m_rels) {
+        for (auto rulePointer : kv.m_value->rules()) {
+            expr_ref fml(m);
+            rm.to_formula(*rulePointer, fml, &lemmer);
+            tmp_file << "(assert " << mk_smt_pp(fml, m) << ")" << std::endl;
+        }
+    }
+    tmp_file << "(check-sat)" << std::endl;
+
+    tmp_file.close();
+    return tmp_file_name;
+}
+
+void context::async_call_foreign_solver_on_clauses()
+{
+    auto foreign_solver_call = std::async(std::launch::async, [this] {
+        std::string filename = save_clauses_to_temporary_file();
+        TRACE("spacer", tout << "foreign solver call on: " << filename << std::endl;);
+        bool isSAT = run_foreign_solver_process(filename);
+        foreign_solver_ended_with_sat = isSAT;
+    });
 }
 
 

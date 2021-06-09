@@ -219,7 +219,7 @@ class smt_printer {
         if (d->get_family_id() == m_dt_fid) {
             datatype_util util(m_manager);
             if (util.is_recognizer(d)) {
-                visit_params(false, sym, d->get_num_parameters(), d->get_parameters());
+                m_out << "is-" << to_func_decl(d->get_parameter(0).get_ast())->get_name();
             }
             else {
                 m_out << sym;

@@ -94,6 +94,7 @@ public:
 
     bool is_n_formula(expr * f) const
     {return m_mux.is_homogenous_formula(f, n_index());}
+    bool is_muxed(func_decl *fdecl) const {return m_mux.is_muxed(fdecl);}
 
     func_decl * o2n(func_decl * p, unsigned o_idx) const
     {return m_mux.shift_decl(p, o_index(o_idx), n_index());}

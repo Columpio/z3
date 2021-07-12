@@ -3085,10 +3085,10 @@ lbool context::solve_core (unsigned from_lvl)
 
         if (check_reachability()) { return l_true; }
 
-        async_call_foreign_solver_on_clauses();
-
         if (lvl > 0 && m_use_propagate)
             if (propagate(m_expanded_lvl, lvl, UINT_MAX)) { dump_json(); return l_false; }
+
+        async_call_foreign_solver_on_clauses(lvl);
 
         dump_json();
 
@@ -3941,21 +3941,43 @@ std::string exec(const char* cmd) {
     return result.str();
 }
 
-bool run_foreign_solver_process(const std::string& filename)
+static inline void rtrim(std::string &s) {
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+        return !std::isspace(ch);
+    }).base(), s.end());
+}
+
+bool run_foreign_solver_process(std::string& filename)
 {
     std::ostringstream command;
+    bool ringen_with_vampire = false;
+    int timelimit_seconds = 30;
+
+    // transform ADTs to sorts
     std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
-    std::string vampire_path = "/home/columpio/Documents/vampire";
-    int timelimit_seconds = 5;
+    command << "dotnet " << ringen_path << " transform --sorts --quiet -o /tmp " << filename;
+    IF_VERBOSE(1, verbose_stream() << "foreign transformer call on: " << filename << std::endl;);
+    filename = exec(command.str().c_str());
+    rtrim(filename);
+    command.str(std::string()); // clear the stream
 
-    setenv("vampire", vampire_path.c_str(), true);
-    command << "dotnet " << ringen_path << " solve --quiet --timelimit " << timelimit_seconds << " vampire " << filename << " 2>&1";
+    IF_VERBOSE(1, verbose_stream() << "foreign solver call on: " << filename << std::endl;);
 
+    if (ringen_with_vampire) {
+        std::string vampire_path = "/home/columpio/Documents/vampire";
+        std::string timelimit_s = true ? " --timelimit 30 " : ""; //TODO: do we need a time limit?
+
+        setenv("vampire", vampire_path.c_str(), true);
+        command << "dotnet " << ringen_path << " solve --quiet" << timelimit_s << " vampire " << filename << " 2>&1";
+    } else { // call CVC4 fmf
+        command << "cvc4 --finite-model-find --tlimit=" << timelimit_seconds * 1000 << ' ' << filename;
+    }
     std::string solver_result = exec(command.str().c_str());
+    rtrim(solver_result);
 
-    if ("unsat\n" == solver_result || "unknown\n" == solver_result)
+    if ("unsat" == solver_result || "unknown" == solver_result)
         return false;
-    else if ("sat\n" == solver_result)
+    else if ("sat" == solver_result)
         return true;
     else {
         NOT_IMPLEMENTED_YET();
@@ -3963,14 +3985,25 @@ bool run_foreign_solver_process(const std::string& filename)
     }
 }
 
-class lemma_adder : public datalog::rule_manager::rule_expr_traverser {
+expr_ref_vector context::default_predicate_args_o(func_decl_ref_vector& pred_sig) {
+    expr_ref_vector predicate_args(m);
+    for (auto& predicate_arg_decl_o : pred_sig) {
+        func_decl* predicate_arg_decl_n = m_pm.o2n(predicate_arg_decl_o, 0);
+        predicate_args.push_back(m.mk_const(predicate_arg_decl_n));
+    }
+    return predicate_args;
+}
+
+class lemma_adder {
     typedef obj_map<func_decl, expr *> lemmas_map;
     typedef obj_map<func_decl, func_decl_ref_vector *> sig_map;
 
     context& m_ctx;
     ast_manager& m;
+    datatype_decl_plugin* m_dtp;
     sig_map * m_signatures;
     lemmas_map * m_lemmas;
+    func_decl_ref_vector m_lemma_preds;
 
     struct lemma_rename_visitor {
         ast_manager& m;
@@ -4020,38 +4053,122 @@ class lemma_adder : public datalog::rule_manager::rule_expr_traverser {
             auto lemma = m_lemmas->find_iterator(app->get_decl());
             if (lemma != m_lemmas->end()) {
                 auto lemma_with_renaming = parent.rename_lemma(app, children, lemma->m_value);
-                return m.mk_and(pred, lemma_with_renaming);
+                return lemma_with_renaming;
             }
             return pred;
         }
         expr * visit(quantifier * q, expr *, expr * const *, expr * const *) { UNREACHABLE(); return nullptr; }
     };
 
-public:
-    explicit lemma_adder(context& ctx) : m_ctx(ctx), m(ctx.get_ast_manager()), m_signatures(new sig_map()), m_lemmas(new lemmas_map()) {
-        for (auto& kv : ctx.get_pred_transformers()) {
-            lemma_ref_vector all_lemmas;
-            bool with_background_invariants = false; //TODO: should use it? m_pinned_lemmas? use_bg_invs();
-            kv.m_value->get_all_lemmas(all_lemmas, with_background_invariants);
+    lemma_ref_vector collect_last_level_lemmas(unsigned level, pred_transformer* pred) {
+        lemma_ref_vector all_lemmas;
+        bool with_background_invariants = false; //TODO: should use it? m_pinned_lemmas? use_bg_invs();
+        pred->get_all_lemmas(all_lemmas, with_background_invariants);
 
-            expr_ref_vector all_lemmas_vec(ctx.get_ast_manager());
-            for (auto lemma_cube : all_lemmas) {
-                all_lemmas_vec.push_back(lemma_cube->get_expr());
+        // get only last level lemmas
+        lemma_ref_vector last_level_lemmas;
+        for (auto& lemma : all_lemmas) {
+            if (lemma->level() >= level) {
+                last_level_lemmas.push_back(lemma);
             }
-            flatten_and(all_lemmas_vec);
-            m_lemmas->insert(kv.m_key, mk_and(all_lemmas_vec).steal());
-            m_signatures->insert(kv.m_key, &kv.m_value->sigv());
+        }
+
+//         if there are no lemmas then the default lemma is true
+        if (last_level_lemmas.empty()) {
+            lemma_ref empty_lemma = alloc(lemma, m, m.mk_true(), level);
+            last_level_lemmas.push_back(empty_lemma.detach());
+        }
+        return last_level_lemmas;
+    }
+
+    bool is_non_ground_term(expr* term) { //TODO: currently supports only ADTs
+        return !m_dtp->is_value((app*) term);
+    }
+
+    bool literal_is_informative(expr* lit) {
+        if (m.is_true(lit) || m.is_false(lit)) return true;
+        m.is_not(lit, lit);
+        expr *left, *right;
+        if (!m.is_eq(lit, left, right)) return false; //TODO: only ADT equalities are handled for now
+        if (!m_dtp->u().is_datatype(left->get_sort()) || !m_dtp->u().is_datatype(right->get_sort())) return false;
+
+        bool l = is_non_ground_term(left);
+        bool r = is_non_ground_term(right);
+        TRACE("spacer", tout << "for " << mk_pp(left, m) << " and " << mk_pp(right, m) << " non_ground: " << l << " " << r << std::endl;);
+        return l && r;
+    }
+
+    expr * lemma_with_its_predicate(func_decl* decl, expr_ref_vector& predicate_args, lemma* lemma) {
+        auto cube = lemma->get_cube();
+        expr_ref_vector clause(m);
+
+        // add lemma literals
+        for (auto& lit : cube) {
+            expr* neg_lit = mk_not(m, lit);
+            if (literal_is_informative(neg_lit)) {
+                clause.push_back(neg_lit);
+            }
+        }
+
+        // add lemma predicate
+        std::string lemma_pred_name = "FMF_Lemma_" + decl->get_name().str();
+        func_decl* lemma_decl = m.mk_fresh_func_decl(lemma_pred_name.c_str(), decl->get_arity(), decl->get_domain(), decl->get_range());
+        m_lemma_preds.push_back(lemma_decl);
+        expr * lemma_pred_app = m.mk_app(lemma_decl, predicate_args);
+        clause.push_back(lemma_pred_app);
+
+        flatten_or(clause);
+        return mk_or(clause).steal();
+    }
+
+    void add_lemmas_of_level(unsigned level, func_decl* decl, pred_transformer* pred) {
+        lemma_ref_vector last_level_lemmas = collect_last_level_lemmas(level, pred);
+
+        auto& pred_sig = pred->sigv();
+        auto predicate_args = m_ctx.default_predicate_args_o(pred_sig);
+
+        expr_ref_vector all_lemmas_vec(m);
+        for (auto lemma : last_level_lemmas) {
+            all_lemmas_vec.push_back(lemma_with_its_predicate(decl, predicate_args, lemma));
+        }
+        flatten_and(all_lemmas_vec);
+        m_lemmas->insert(decl, mk_and(all_lemmas_vec).steal());
+        m_signatures->insert(decl, &pred_sig);
+
+        TRACE("spacer",
+                expr_ref_vector last_level_lemmas_exprs(m);
+                for (auto& lemma : last_level_lemmas) last_level_lemmas_exprs.push_back(lemma->get_expr());
+                tout << "for predicate: " << decl->get_name() << " on level " << level << std::endl;
+                tout << "original lemmas: " << mk_and(last_level_lemmas_exprs) << std::endl;
+                tout << "     new lemmas: " << mk_and(all_lemmas_vec) << std::endl;);
+    }
+
+public:
+    func_decl_ref_vector get_lemma_preds() {
+        return m_lemma_preds;
+    }
+
+    explicit lemma_adder(context& ctx, unsigned level)
+        : m_ctx(ctx), m(ctx.get_ast_manager()), m_signatures(new sig_map()), m_lemmas(new lemmas_map()), m_lemma_preds(ctx.get_ast_manager()) {
+        family_id dfid = m.mk_family_id("datatype");
+        m_dtp = dynamic_cast<datatype_decl_plugin*>(m.get_plugin(dfid));
+        for (auto& kv : ctx.get_pred_transformers()) {
+            add_lemmas_of_level(level, kv.m_key, kv.m_value);
         }
     }
 
-    void traverse_rule_expr(expr_ref& fml) final {
+    void traverse_rule_expr(expr_ref& fml) { // fml is the whole clause
         lemma_add_visitor v(*this);
         recurse_expr<expr *, lemma_add_visitor, true, false> r(v);
         fml = r(fml.steal());
     }
 };
 
-std::string context::save_clauses_to_temporary_file()
+void assert_rule_to_file(std::ofstream& file, ast_manager& m, expr_ref& rule) {
+    file << "(assert " << mk_smt_pp(rule, m) << ")" << std::endl;
+}
+
+std::string context::save_clauses_to_temporary_file(unsigned level)
 {
     std::ostringstream tmp_file_names;
     auto current_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -4061,41 +4178,82 @@ std::string context::save_clauses_to_temporary_file()
     tmp_file.open(tmp_file_name);
     tmp_file << "(set-logic HORN)" << std::endl;
 
+    lemma_adder lemmer(*this, level);
+
     //TODO: add declare-datatypes
+    family_id dfid = m.mk_family_id("datatype");
+    auto dtp = dynamic_cast<datatype_decl_plugin*>(m.get_plugin(dfid));
     decl_collector decls(m);
     for (auto &relation : m_rels) {
         decls.visit(relation.m_key);
     }
-    for (auto sort : decls.get_sorts()) {
-        tmp_file << mk_smt_pp(sort, m) << std::endl;
+    ptr_vector<sort> dts = decls.get_sorts();
+    sort* s1 = nullptr;
+    while (!dts.empty()) {
+        if (!s1) s1 = dts[0];
+        sort* lesser = nullptr;
+        for (auto s2 : dts) {
+            if (dtp->u().less(s2, s1)) {
+                lesser = s2;
+                break;
+            }
+        }
+        if (lesser) {
+            s1 = lesser;
+        } else {
+            tmp_file << mk_smt_pp(s1, m) << std::endl;
+            dts.erase(s1);
+            s1 = nullptr;
+        }
     }
 
     // add `declare-fun`s to file
     for (auto &relation : m_rels) {
         tmp_file << mk_pp(relation.m_key, m) << std::endl;
     }
+    for (auto& lemma_pred : lemmer.get_lemma_preds()) {
+        tmp_file << mk_pp(lemma_pred, m) << std::endl;
+    }
 
     // add CHC rules to file
-    lemma_adder lemmer(*this);
     datalog::rule_manager& rm = get_datalog_context().get_rule_manager();
     for (auto& kv : m_rels) {
         for (auto rulePointer : kv.m_value->rules()) {
             expr_ref fml(m);
-            rm.to_formula(*rulePointer, fml, &lemmer);
-            tmp_file << "(assert " << mk_smt_pp(fml, m) << ")" << std::endl;
+            rm.rule_body(*rulePointer, fml);
+            lemmer.traverse_rule_expr(fml);
+            rm.quantifier_closure(fml);
+            assert_rule_to_file(tmp_file, m, fml);
         }
     }
+
+    // add query
+    expr_ref_vector query_arguments(m);
+    for (unsigned i = 0, sz = m_query->sig_size(); i < sz; ++i) {
+        query_arguments.push_back(m.mk_var(i, m_query->sig(i)->get_range()));
+    }
+    expr* query = m.mk_implies(m.mk_app(m_query_pred.get(), query_arguments), m.mk_false());
+    expr_ref query_fml = expr_ref(query, m);
+    lemmer.traverse_rule_expr(query_fml);
+    TRACE("spacer",
+            lemma_ref_vector query_lemmas;
+                m_query->get_all_lemmas(query_lemmas);
+                tout << "query lemmas:" << std::endl;
+                for (auto lemma : query_lemmas) tout << "level: " << lemma->level() << ' ' << mk_pp(lemma->get_expr(), m) << std::endl;
+          );
+    TRACE("spacer", tout << "with query: " << mk_pp(query_fml, m) << std::endl;);
+    rm.quantifier_closure(query_fml);
+    assert_rule_to_file(tmp_file, m, query_fml);
     tmp_file << "(check-sat)" << std::endl;
 
     tmp_file.close();
     return tmp_file_name;
 }
 
-void context::async_call_foreign_solver_on_clauses()
+void context::async_call_foreign_solver_on_clauses(unsigned level)
 {
-    auto foreign_solver_call = std::async(std::launch::async, [this] {
-        std::string filename = save_clauses_to_temporary_file();
-        TRACE("spacer", tout << "foreign solver call on: " << filename << std::endl;);
+    auto foreign_solver_call = std::async(std::launch::async, [this, level] {
+        std::string filename = save_clauses_to_temporary_file(level);
         bool isSAT = run_foreign_solver_process(filename);
         foreign_solver_ended_with_sat = isSAT;
     });

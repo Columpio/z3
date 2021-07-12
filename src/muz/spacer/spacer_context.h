@@ -1361,9 +1361,9 @@ class context {
     bool check_mdl(pob &n, const datalog::rule *r, model &model);
     bool mk_mdl_rf_consistent(model &mdl);
 
-    bool foreign_solver_ended_with_sat;
-    void async_call_foreign_solver_on_clauses();
-    std::string save_clauses_to_temporary_file();
+    bool foreign_solver_ended_with_sat = false;
+    void async_call_foreign_solver_on_clauses(unsigned level);
+    std::string save_clauses_to_temporary_file(unsigned level);
 
 public:
     /**
@@ -1457,6 +1457,8 @@ public:
     solver* mk_solver0() {return m_pool0->mk_solver();}
     solver* mk_solver1() {return m_pool1->mk_solver();}
     solver* mk_solver2() {return m_pool2->mk_solver();}
+
+    expr_ref_vector default_predicate_args_o(func_decl_ref_vector &pred_sig);
 };
 
 inline bool pred_transformer::use_native_mbp () {return ctx.use_native_mbp ();}

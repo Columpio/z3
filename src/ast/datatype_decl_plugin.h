@@ -199,6 +199,7 @@ namespace datatype {
         param_size::size* sort_size() { return m_sort_size; }
         void set_sort_size(param_size::size* p) { m_sort_size = p; if (p) p->inc_ref(); m_sort = nullptr; }
         def* translate(ast_translation& tr, util& u);
+        sort_ref get_sort() { return m_sort; }
     };
 
     namespace decl {
@@ -382,6 +383,16 @@ namespace datatype {
                                   func_decl_ref& nil, func_decl_ref& is_nil);
         sort_ref mk_pair_datatype(sort* a, sort* b, func_decl_ref& fst, func_decl_ref& snd, func_decl_ref& pair);
         sort_ref mk_tuple_datatype(svector<std::pair<symbol, sort*>> const& elems, symbol const& name, symbol const& test, func_decl_ref& tup, func_decl_ref_vector& accs);
+        bool less(sort * a, sort * b) {
+            if (a == b) return false;
+            for (auto constr : *get_datatype_constructors(b)) {
+                for (unsigned i = 0, domain_size = constr->get_arity(); i < domain_size; i++) {
+                    if (constr->get_domain(i) == a)
+                        return true;
+                }
+            }
+            return false;
+        }
     };
 
 };

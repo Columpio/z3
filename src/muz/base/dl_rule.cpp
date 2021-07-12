@@ -554,7 +554,7 @@ namespace datalog {
         return r;
     }
 
-    void rule_manager::to_formula(rule const& r, expr_ref& fml, rule_expr_traverser * traverser) {
+    void rule_manager::rule_body(rule const& r, expr_ref& fml) {
         ast_manager & m = fml.get_manager();
         expr_ref_vector body(m);
         for (unsigned i = 0; i < r.get_tail_size(); i++) {
@@ -569,10 +569,10 @@ namespace datalog {
         case 1:  fml = m.mk_implies(body[0].get(), fml); break;
         default: fml = m.mk_implies(m.mk_and(body.size(), body.c_ptr()), fml); break;
         }
+    }
 
-        if (traverser) traverser->traverse_rule_expr(fml);
-
-        m_free_vars.reset();        
+    void rule_manager::quantifier_closure(expr_ref& fml) {
+        m_free_vars.reset();
         m_free_vars(fml);
         if (m_free_vars.empty()) {
             return;
@@ -597,6 +597,11 @@ namespace datalog {
             }
         }
         fml = m.mk_forall(m_free_vars.size(), m_free_vars.c_ptr(), names.c_ptr(), fml);
+    }
+
+    void rule_manager::to_formula(rule const& r, expr_ref& fml) {
+        rule_body(r, fml);
+        quantifier_closure(fml);
     }
 
     std::ostream& rule_manager::display_smt2(rule const& r, std::ostream & out) {

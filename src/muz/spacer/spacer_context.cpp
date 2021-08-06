@@ -24,6 +24,7 @@ Notes:
 #include <sstream>
 #include <iomanip>
 #include <future>
+#include <stdlib.h>
 
 #include "util/util.h"
 #include "util/timeit.h"
@@ -3880,22 +3881,26 @@ lbool context::expand_pob(pob& n, pob_ref_buffer &out)
     throw unknown_exception();
 }
 
-std::string exec(const char* cmd) {
-    std::array<char, 128> buffer;
-    std::ostringstream result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (!pipe) {
-        throw std::runtime_error("popen() failed!");
+std::string ssystem (const char *command) {
+    char tmpname [L_tmpnam];
+    mkstemp(tmpname);
+    std::string scommand = command;
+    std::string cmd = scommand + " >> " + tmpname;
+    std::system(cmd.c_str());
+    std::ifstream file(tmpname, std::ios::in | std::ios::binary );
+    std::string result;
+    if (file) {
+        while (!file.eof()) result.push_back(file.get())
+            ;
+        file.close();
     }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result << buffer.data();
-    }
-    return result.str();
+    remove(tmpname);
+    return result;
 }
 
 static inline void rtrim(std::string &s) {
     s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
-        return !std::isspace(ch);
+        return std::isgraph(ch);
     }).base(), s.end());
 }
 
@@ -3906,10 +3911,11 @@ bool run_foreign_solver_process(std::string& filename)
     int timelimit_seconds = 30;
 
     // transform ADTs to sorts
-    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
+    std::string ringen_path = "/home/columpio/RInGen/bin/Release/net5.0/RInGen.dll";
     command << "dotnet " << ringen_path << " transform --sorts --quiet -o /tmp " << filename;
     IF_VERBOSE(1, verbose_stream() << "foreign transformer call on: " << filename << std::endl;);
-    filename = exec(command.str().c_str());
+    filename = ssystem(command.str().c_str());
+    IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << filename << std::endl;);
     rtrim(filename);
     command.str(std::string()); // clear the stream
 
@@ -3924,7 +3930,7 @@ bool run_foreign_solver_process(std::string& filename)
     } else { // call CVC4 fmf
         command << "cvc4 --finite-model-find --tlimit=" << timelimit_seconds * 1000 << ' ' << filename;
     }
-    std::string solver_result = exec(command.str().c_str());
+    std::string solver_result = ssystem(command.str().c_str());
     rtrim(solver_result);
 
     if ("unsat" == solver_result || "unknown" == solver_result)

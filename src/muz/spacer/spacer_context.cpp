@@ -3931,7 +3931,7 @@ lbool context::expand_pob(pob& n, pob_ref_buffer &out)
 
 std::string ssystem (const char *command) {
     char tmpname [L_tmpnam];
-    mkstemp(tmpname);
+    std::tmpnam(tmpname);
     std::string scommand = command;
     std::string cmd = scommand + " >> " + tmpname;
     std::system(cmd.c_str());

@@ -3911,7 +3911,7 @@ bool run_foreign_solver_process(std::string& filename)
     int timelimit_seconds = 30;
 
     // transform ADTs to sorts
-    std::string ringen_path = "/home/columpio/RInGen/bin/Release/net5.0/RInGen.dll";
+    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
     command << "dotnet " << ringen_path << " transform --sorts --quiet -o /tmp " << filename;
     IF_VERBOSE(1, verbose_stream() << "foreign transformer call on: " << filename << std::endl;);
     filename = ssystem(command.str().c_str());

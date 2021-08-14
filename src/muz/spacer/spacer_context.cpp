@@ -3960,11 +3960,11 @@ bool run_foreign_solver_process(std::string& filename)
 
     // transform ADTs to sorts
     std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
-    command << "dotnet " << ringen_path << " transform --sorts --quiet -o /tmp " << filename;
+    command << "dotnet " << ringen_path << " --quiet -o /tmp transform --mode freesorts " << filename;
     IF_VERBOSE(1, verbose_stream() << "foreign transformer call on: " << filename << std::endl;);
     filename = ssystem(command.str().c_str());
-    IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << filename << std::endl;);
     rtrim(filename);
+    IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << filename << std::endl;);
     command.str(std::string()); // clear the stream
 
     IF_VERBOSE(1, verbose_stream() << "foreign solver call on: " << filename << std::endl;);
@@ -4096,7 +4096,7 @@ class lemma_adder {
         m.is_not(lit, lit);
         expr *left, *right;
         if (!m.is_eq(lit, left, right)) return false; //TODO: only ADT equalities are handled for now
-        if (!m_dtp->u().is_datatype(left->get_sort()) || !m_dtp->u().is_datatype(right->get_sort())) return false;
+        if (!m_dtp->u().is_datatype(get_sort(left)) || !m_dtp->u().is_datatype(get_sort(right))) return false;
 
         bool l = is_non_ground_term(left);
         bool r = is_non_ground_term(right);

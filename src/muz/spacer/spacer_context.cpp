@@ -25,6 +25,7 @@ Notes:
 #include <iomanip>
 #include <future>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #include "util/util.h"
 #include "util/timeit.h"
@@ -3952,6 +3953,12 @@ static inline void rtrim(std::string &s) {
     }).base(), s.end());
 }
 
+inline bool exists_file(const std::string& name)
+{
+  struct stat buffer;
+  return (stat (name.c_str(), &buffer) == 0);
+}
+
 bool run_foreign_solver_process(std::string& filename)
 {
     std::ostringstream command;
@@ -3966,6 +3973,8 @@ bool run_foreign_solver_process(std::string& filename)
     rtrim(filename);
     IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << filename << std::endl;);
     command.str(std::string()); // clear the stream
+
+    if (!exists_file(filename)) return false;
 
     IF_VERBOSE(1, verbose_stream() << "foreign solver call on: " << filename << std::endl;);
 

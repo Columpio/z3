@@ -4302,15 +4302,14 @@ void context::print_lemmas(unsigned level)
 //    fflush(m_foreign_process_process);
 }
 
-void context::async_call_foreign_solver_on_clauses(unsigned level)
-{
-    auto foreign_solver_call = std::async(std::launch::async, [this, level] {
-        IF_VERBOSE(1, verbose_stream() << "add lemmas from level " << level << std::endl;);
-        print_lemmas(level);
-//        bool isSAT = run_foreign_solver_process(level);
-//        foreign_solver_ended_with_sat = isSAT;
-//        IF_VERBOSE(1, verbose_stream() << "foreign solver ended with " << (isSAT ? "sat" : "unknown") << " on level " << level << std::endl;);
-    });
+void async_call_foreign_solver(context* ctx, unsigned level) {
+    ctx->print_lemmas(level);
+}
+
+void context::async_call_foreign_solver_on_clauses(unsigned level) {
+    IF_VERBOSE(1, verbose_stream() << "add lemmas from level " << level << std::endl;);
+    std::thread thr(async_call_foreign_solver, this, level);
+    thr.detach();
 }
 
 

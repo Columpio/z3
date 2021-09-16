@@ -1292,6 +1292,8 @@ class context {
     scoped_ptr_vector<spacer_callback> m_callbacks;
     json_marshaller      m_json_marshaller;
     std::fstream*        m_trace_stream;
+    std::string          m_foreign_solver_aux_folder;
+    FILE*                m_foreign_process_process;
 
     // Solve using gpdr strategy
     lbool gpdr_solve_core();
@@ -1363,7 +1365,10 @@ class context {
 
     bool foreign_solver_ended_with_sat = false;
     void async_call_foreign_solver_on_clauses(unsigned level);
-    std::string save_clauses_to_temporary_file(unsigned level);
+    void print_to_foreign_process(std::ostringstream& lines);
+    void print_original_clauses();
+    void print_lemmas(unsigned level);
+    void init_foreign_solver();
 
 public:
     /**

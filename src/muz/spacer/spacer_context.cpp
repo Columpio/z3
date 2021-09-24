@@ -2360,14 +2360,14 @@ void context::init_foreign_solver() {
     m_foreign_solver_aux_folder = tmp_file_names.str();
     mkdir(m_foreign_solver_aux_folder.c_str(), 0777);
 
-    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Debug/net5.0/RInGen.dll";
-    std::string timelimit_seconds = "30";
-    std::string command = "dotnet " + ringen_path + " --quiet --timelimit " + timelimit_seconds + " -o " + m_foreign_solver_aux_folder + " solve --solver cvc-fmf --in --transform";
-    IF_VERBOSE(1, verbose_stream() << "run foreign solver with the command:" << std::endl << command << std::endl;);
-    m_foreign_process_process = popen(command.c_str(), "w");
+//    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Debug/net5.0/RInGen.dll";
+//    std::string timelimit_seconds = "30";
+//    std::string command = "dotnet " + ringen_path + " --quiet --timelimit " + timelimit_seconds + " -o " + m_foreign_solver_aux_folder + " solve --solver vampire --in --transform";
+//    IF_VERBOSE(1, verbose_stream() << "run foreign solver with the command:" << std::endl << command << std::endl;);
+//    m_foreign_process_process = popen(command.c_str(), "w");
 //    setvbuf(m_foreign_process_process, nullptr, _IONBF, 0);
 
-    print_original_clauses();
+//    print_original_clauses();
 }
 
 void context::updt_params() {
@@ -2841,7 +2841,7 @@ lbool context::solve(unsigned from_lvl)
 
 
 void context::checkpoint() {
-    if (foreign_solver_ended_with_sat)
+    if (m_foreign_solver_ended_with_sat)
         throw default_exception("off-the-shelf solver ended with sat"); //TODO: need to kill all other processes?
     tactic::checkpoint(m);
 }
@@ -3980,44 +3980,20 @@ inline bool exists_file(const std::string& name)
   return (stat (name.c_str(), &buffer) == 0);
 }
 
-bool run_foreign_solver_process(std::string& filename)
+void context::run_foreign_solver_process(const std::string& filename)
 {
     std::ostringstream command;
-    bool ringen_with_vampire = false;
+    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Debug/net5.0/RInGen.dll";
     int timelimit_seconds = 30;
+    command << "dotnet " + ringen_path + " --quiet --timelimit " << timelimit_seconds << " -o " + m_foreign_solver_aux_folder + " solve --solver vampire --path " << filename << " -t";
+    IF_VERBOSE(1, verbose_stream() << "run foreign solver with the command:" << std::endl << command.str() << std::endl;);
 
-    // transform ADTs to sorts
-    std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
-    command << "dotnet " << ringen_path << " --quiet -o /tmp transform --mode freesorts " << filename;
-    IF_VERBOSE(1, verbose_stream() << "foreign transformer call on: " << filename << std::endl;);
-    filename = ssystem(command.str().c_str());
-    rtrim(filename);
-    IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << filename << std::endl;);
-    command.str(std::string()); // clear the stream
-
-    if (!exists_file(filename)) return false;
-
-    IF_VERBOSE(1, verbose_stream() << "foreign solver call on: " << filename << std::endl;);
-
-    if (ringen_with_vampire) {
-        std::string vampire_path = "/home/columpio/Documents/vampire";
-        std::string timelimit_s = true ? " --timelimit 30 " : ""; //TODO: do we need a time limit?
-
-        setenv("vampire", vampire_path.c_str(), true);
-        command << "dotnet " << ringen_path << " solve --quiet" << timelimit_s << " vampire " << filename << " 2>&1";
-    } else { // call CVC4 fmf
-        command << "cvc4 --finite-model-find --tlimit=" << timelimit_seconds * 1000 << ' ' << filename;
-    }
     std::string solver_result = ssystem(command.str().c_str());
     rtrim(solver_result);
+    IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << solver_result << std::endl;);
 
-    if ("unsat" == solver_result || "unknown" == solver_result)
-        return false;
-    else if ("sat" == solver_result)
-        return true;
-    else {
-        NOT_IMPLEMENTED_YET();
-        return false;
+    if ("sat" == solver_result) {
+        m_foreign_solver_ended_with_sat = true;
     }
 }
 
@@ -4276,10 +4252,9 @@ void context::print_original_clauses()
 }
 
 void context::print_to_foreign_process(std::ostringstream& lines) {
-    std::string line = lines.str();
-    size_t written_size = fwrite(line.c_str(), sizeof(char), line.length(), m_foreign_process_process);
+    std::ofstream file(m_foreign_solver_current_filename, std::ios_base::app);
+    file << lines.str();
     lines.str("");
-    IF_VERBOSE(2, verbose_stream() << "written to foreign solver: " << written_size << std::endl;);
 }
 
 void context::print_lemmas(unsigned level)
@@ -4302,13 +4277,24 @@ void context::print_lemmas(unsigned level)
 //    fflush(m_foreign_process_process);
 }
 
-void async_call_foreign_solver(context* ctx, unsigned level) {
-    ctx->print_lemmas(level);
+void async_call_foreign_solver(context* ctx, const std::string& tmp_file_name) {
+    ctx->run_foreign_solver_process(tmp_file_name);
 }
 
 void context::async_call_foreign_solver_on_clauses(unsigned level) {
     IF_VERBOSE(1, verbose_stream() << "add lemmas from level " << level << std::endl;);
-    std::thread thr(async_call_foreign_solver, this, level);
+
+    auto ctx = this;
+    std::ostringstream tmp_file_names;
+    tmp_file_names << ctx->m_foreign_solver_aux_folder << "iteration_" << level << ".smt2";
+    std::string tmp_file_name = tmp_file_names.str();rin
+
+    ctx->m_foreign_solver_current_filename = tmp_file_name;
+
+    ctx->print_original_clauses();
+    ctx->print_lemmas(level);
+
+    std::thread thr(async_call_foreign_solver, this, tmp_file_name);
     thr.detach();
 }
 

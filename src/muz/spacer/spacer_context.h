@@ -1292,7 +1292,6 @@ class context {
     scoped_ptr_vector<spacer_callback> m_callbacks;
     json_marshaller      m_json_marshaller;
     std::fstream*        m_trace_stream;
-    std::string          m_foreign_solver_aux_folder;
     FILE*                m_foreign_process_process;
 
     // Solve using gpdr strategy
@@ -1362,12 +1361,10 @@ class context {
     void updt_params();
     bool check_mdl(pob &n, const datalog::rule *r, model &model);
     bool mk_mdl_rf_consistent(model &mdl);
-
-    bool foreign_solver_ended_with_sat = false;
+    void init_foreign_solver();
+    bool m_foreign_solver_ended_with_sat = false;
     void async_call_foreign_solver_on_clauses(unsigned level);
     void print_to_foreign_process(std::ostringstream& lines);
-    void print_original_clauses();
-    void init_foreign_solver();
 
 public:
     /**
@@ -1463,7 +1460,12 @@ public:
     solver* mk_solver2() {return m_pool2->mk_solver();}
 
     expr_ref_vector default_predicate_args_o(func_decl_ref_vector &pred_sig);
+
+    std::string m_foreign_solver_current_filename;
+    std::string m_foreign_solver_aux_folder;
+    void print_original_clauses();
     void print_lemmas(unsigned level);
+    void run_foreign_solver_process(const std::string &filename);
 };
 
 inline bool pred_transformer::use_native_mbp () {return ctx.use_native_mbp ();}

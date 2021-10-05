@@ -24,6 +24,7 @@ Notes:
 
 #include <queue>
 #include <fstream>
+#include <thread>
 
 #include "util/scoped_ptr_vector.h"
 #include "muz/spacer/spacer_manager.h"
@@ -1362,8 +1363,9 @@ class context {
     bool check_mdl(pob &n, const datalog::rule *r, model &model);
     bool mk_mdl_rf_consistent(model &mdl);
     void init_foreign_solver();
-    bool m_foreign_solver_ended_with_sat = false;
-    void async_call_foreign_solver_on_clauses(unsigned level);
+    long long int m_foreign_solver_ended_with_sat_on_level = -2;
+    std::vector<std::thread> m_foreign_solver_runs;
+    void async_call_foreign_solver_on_clauses(long long int level);
     void print_to_foreign_process(std::ostringstream& lines);
 
 public:
@@ -1465,7 +1467,7 @@ public:
     std::string m_foreign_solver_aux_folder;
     void print_original_clauses();
     void print_lemmas(unsigned level);
-    void run_foreign_solver_process(const std::string &filename);
+    void run_foreign_solver_process(const std::string &filename, long long int level);
 };
 
 inline bool pred_transformer::use_native_mbp () {return ctx.use_native_mbp ();}

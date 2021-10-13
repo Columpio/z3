@@ -2342,6 +2342,10 @@ context::context(fp_params const& params, ast_manager& m) :
 
 context::~context()
 {
+    for (std::thread& th : m_foreign_solver_runs) {
+        if (th.joinable()) th.join();
+    }
+
     if (m_foreign_process_process) pclose(m_foreign_process_process);
     reset_lemma_generalizers();
     dealloc(m_lmma_cluster);
@@ -3993,9 +3997,10 @@ inline bool exists_file(const std::string& name)
 void context::run_foreign_solver_process(const std::string& filename, long long int level)
 {
     std::ostringstream command;
+    //std::string ringen_path = "/home/almazis/git/RInGen/bin/Release/net5.0/RInGen.dll";
     std::string ringen_path = "/home/columpio/RiderProjects/RInGen/bin/Release/net5.0/RInGen.dll";
     int timelimit_seconds = 30;
-    command << "dotnet " + ringen_path + " --quiet --timelimit " << timelimit_seconds << " -o " + m_foreign_solver_aux_folder + " solve --solver vampire --path " << filename << " -t";
+    command << "dotnet " + ringen_path + " --quiet --timelimit " << timelimit_seconds << " -o " + m_foreign_solver_aux_folder + " solve --solver cvc-fmf --path " << filename << " -t";
     IF_VERBOSE(1, verbose_stream() << "run foreign solver with the command:" << std::endl << command.str() << std::endl;);
 
     std::string solver_result = ssystem(command.str().c_str(), level, &m_foreign_solver_ended_with_sat_on_level);

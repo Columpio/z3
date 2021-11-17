@@ -2844,11 +2844,14 @@ lbool context::solve(unsigned from_lvl)
 
 
 void context::checkpoint() {
-    if (m_foreign_solver_ended_with_sat_on_level >= -1) {
+    if (m_foreign_solver_ended_with_sat_on_level >= -2) {
         for (std::thread& th : m_foreign_solver_runs) {
             if (th.joinable()) th.join();
         }
-        throw default_exception(default_exception::fmt(), "off-the-shelf solver ended with sat on level: %d",
+        if (-2 == m_foreign_solver_ended_with_sat_on_level)
+            throw default_exception(default_exception::fmt(), "off-the-shelf solver ended with unsat on level: -1");
+        else
+            throw default_exception(default_exception::fmt(), "off-the-shelf solver ended with sat on level: %d",
                                 m_foreign_solver_ended_with_sat_on_level);
     }
     tactic::checkpoint(m);
@@ -4002,8 +4005,10 @@ void context::run_foreign_solver_process(const std::string& filename, long long 
     rtrim(solver_result);
     IF_VERBOSE(1, verbose_stream() << "foreign transformer returned: " << solver_result << " on " << filename << std::endl;);
 
-    if ("sat" == solver_result && (level < m_foreign_solver_ended_with_sat_on_level || m_foreign_solver_ended_with_sat_on_level < -1)) {
+    if ("sat" == solver_result && (level < m_foreign_solver_ended_with_sat_on_level || m_foreign_solver_ended_with_sat_on_level <= -3)) {
         m_foreign_solver_ended_with_sat_on_level = level;
+    } else if ("unsat" == solver_result && -1 == level) {
+        m_foreign_solver_ended_with_sat_on_level = -2;
     }
 }
 

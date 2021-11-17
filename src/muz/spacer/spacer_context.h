@@ -1363,7 +1363,7 @@ class context {
     bool check_mdl(pob &n, const datalog::rule *r, model &model);
     bool mk_mdl_rf_consistent(model &mdl);
     void init_foreign_solver();
-    long long int m_foreign_solver_ended_with_sat_on_level = -2;
+    long long int m_foreign_solver_ended_with_sat_on_level = -3;
     std::vector<std::thread> m_foreign_solver_runs;
     void async_call_foreign_solver_on_clauses(long long int level);
     void print_to_foreign_process(std::ostringstream& lines);

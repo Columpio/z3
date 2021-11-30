@@ -2346,7 +2346,7 @@ context::~context()
         if (th.joinable()) th.join();
     }
 
-    if (m_foreign_process_process) pclose(m_foreign_process_process);
+    // if (m_foreign_process_process) pclose(m_foreign_process_process);
     reset_lemma_generalizers();
     dealloc(m_lmma_cluster);
     reset();
